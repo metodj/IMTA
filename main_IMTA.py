@@ -69,7 +69,7 @@ def main():
         'project': 'anytime-poe-imta',
         'entity': 'metodj',
         'notes': '',
-        'mode': 'online',
+        'mode': 'offline',
         'config': vars(args)
     }
     with wandb.init(**wandb_kwargs) as run:
@@ -169,14 +169,15 @@ def main():
                 best_epoch = epoch
                 print('Best var_acc1 {}'.format(best_acc1))
 
-            model_filename = 'checkpoint_%03d.pth.tar' % epoch
-            save_checkpoint({
-                'epoch': epoch,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
-                'optimizer': optimizer.state_dict(),
-            }, args, is_best, model_filename, scores)
+            if epoch % 10 == 0:
+                model_filename = 'checkpoint_%03d.pth.tar' % epoch
+                save_checkpoint({
+                    'epoch': epoch,
+                    'arch': args.arch,
+                    'state_dict': model.state_dict(),
+                    'best_acc1': best_acc1,
+                    'optimizer': optimizer.state_dict(),
+                }, args, is_best, model_filename, scores)
 
         print('Best val_acc1: {:.4f} at epoch {}'.format(best_acc1, best_epoch))
 

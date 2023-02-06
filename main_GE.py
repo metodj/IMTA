@@ -174,14 +174,15 @@ def main():
                 best_epoch = epoch
                 print('Best var_err1 {}'.format(best_err1))
 
-            model_filename = 'checkpoint_%03d.pth.tar' % epoch
-            save_checkpoint({
-                'epoch': epoch,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_err1': best_err1,
-                'optimizer': optimizer.state_dict(),
-            }, args, is_best, model_filename, scores)
+            if epoch % 10 == 0:
+                model_filename = 'checkpoint_%03d.pth.tar' % epoch
+                save_checkpoint({
+                    'epoch': epoch,
+                    'arch': args.arch,
+                    'state_dict': model.state_dict(),
+                    'best_err1': best_err1,
+                    'optimizer': optimizer.state_dict(),
+                }, args, is_best, model_filename, scores)
 
         print('Best val_err1: {:.4f} at epoch {}'.format(best_err1, best_epoch))
 
