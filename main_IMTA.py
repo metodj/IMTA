@@ -69,7 +69,7 @@ def main():
         'project': 'anytime-poe-imta',
         'entity': 'metodj',
         'notes': '',
-        'mode': 'offline',
+        'mode': 'online',
         'config': vars(args)
     }
     with wandb.init(**wandb_kwargs) as run:
@@ -215,6 +215,10 @@ def train(train_loader, model, kd_loss, optimizer, epoch):
         output, soft_target = model(input_var)
         if not isinstance(output, list):
             output = [output]
+
+        # # test if pretrained model is actually used
+        # _output, _ = model.module.net(input_var.cuda())
+        # print((torch.argmax(_output[-1], dim=1) == target).sum() / len(target))
 
         loss = kd_loss.loss_fn_kd(output, target_var, soft_target)
         losses.update(loss.item(), input.size(0))
