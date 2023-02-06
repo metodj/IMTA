@@ -16,12 +16,12 @@ def get_dataloaders(args):
                                         transforms.RandomHorizontalFlip(),
                                         transforms.ToTensor(),
                                         normalize
-                                     ]))
+                                     ]), download=True)
         val_set = datasets.CIFAR10(args.data_root, train=False,
                                    transform=transforms.Compose([
                                     transforms.ToTensor(),
                                     normalize
-                                   ]))
+                                   ]), download=True)
     elif args.data == 'cifar100':
         normalize = transforms.Normalize(mean=[0.5071, 0.4867, 0.4408],
                                          std=[0.2675, 0.2565, 0.2761])
@@ -31,12 +31,12 @@ def get_dataloaders(args):
                                         transforms.RandomHorizontalFlip(),
                                         transforms.ToTensor(),
                                         normalize
-                                      ]))
+                                      ]), download=True)
         val_set = datasets.CIFAR100(args.data_root, train=False,
                                     transform=transforms.Compose([
                                         transforms.ToTensor(),
                                         normalize
-                                    ]))
+                                    ]), download=True)
     else:
         # ImageNet
         traindir = os.path.join(args.data_root, 'train')

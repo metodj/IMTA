@@ -16,6 +16,10 @@ from opcounter import measure_model
 from adaptive_inference import dynamic_evaluate
 import models
 
+# https://github.com/pytorch/pytorch/issues/11201
+import torch.multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')
+
 args = arg_parser.parse_args()
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
@@ -40,8 +44,11 @@ import torch.nn as nn
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
+import wandb
 
 torch.manual_seed(args.seed)
+
+os.environ["WANDB_API_KEY"] = "e31842f98007cca7e04fd98359ea9bdadda29073"
 
 def main():
 
@@ -72,95 +79,111 @@ def main():
     # fout = open('model.txt', 'w')
     # print(model, file=fout)
 
-    if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
-        model.features = torch.nn.DataParallel(model.features)
-        model.cuda()
-    else:
-        model = torch.nn.DataParallel(model).cuda()
+    wandb_kwargs = {
+        'project': 'anytime-poe-imta',
+        'entity': 'metodj',
+        'notes': '',
+        'mode': 'online',
+        'config': vars(args)
+    }
+    with wandb.init(**wandb_kwargs) as run:
 
-    # define loss function (criterion) and pptimizer
-    criterion = nn.CrossEntropyLoss().cuda()
-    # define optimizer
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
-
-    # optionally resume from a checkpoint
-    if args.resume:
-        checkpoint = load_checkpoint(args)
-        if checkpoint is not None:
-            args.start_epoch = checkpoint['epoch'] + 1
-            best_err1 = checkpoint['best_err1']
-            model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-
-    cudnn.benchmark = True
-
-    train_loader, val_loader, test_loader = get_dataloaders(args)
-    print("*************************************")
-    print(args.use_valid, len(train_loader), len(val_loader), len(test_loader))
-    print("*************************************")
-
-    if args.evalmode is not None:
-        m = torch.load(args.evaluate_from)
-        model.load_state_dict(m['state_dict'])
-
-        if args.evalmode == 'anytime':
-            validate(test_loader, model, criterion)
+        if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
+            model.features = torch.nn.DataParallel(model.features)
+            model.cuda()
         else:
-            dynamic_evaluate(model, test_loader, val_loader, args)
-        return
+            model = torch.nn.DataParallel(model).cuda()
 
-    # set up logging
-    global log_print, f_log
-    f_log = open(os.path.join(args.save, 'log.txt'), 'w')
+        # define loss function (criterion) and pptimizer
+        criterion = nn.CrossEntropyLoss().cuda()
+        # define optimizer
+        optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                                    momentum=args.momentum,
+                                    weight_decay=args.weight_decay)
 
-    def log_print(*args):
-        print(*args)
-        print(*args, file=f_log)
-    log_print('args:')
-    log_print(args)
-    print('model:', file=f_log)
-    print(model, file=f_log)
-    log_print('# of params:',
-              str(sum([p.numel() for p in model.parameters()])))
+        # optionally resume from a checkpoint
+        if args.resume:
+            checkpoint = load_checkpoint(args)
+            if checkpoint is not None:
+                args.start_epoch = checkpoint['epoch'] + 1
+                best_err1 = checkpoint['best_err1']
+                model.load_state_dict(checkpoint['state_dict'])
+                optimizer.load_state_dict(checkpoint['optimizer'])
 
-    f_log.flush()
+        cudnn.benchmark = True
 
-    scores = ['epoch\tlr\ttrain_loss\tval_loss\ttrain_err1'
-              '\tval_err1\ttrain_err5\tval_err5']
+        train_loader, val_loader, test_loader = get_dataloaders(args)
+        print("*************************************")
+        print(args.use_valid, len(train_loader), len(val_loader), len(test_loader))
+        print("*************************************")
 
-    for epoch in range(args.start_epoch, args.epochs):
+        if args.evalmode is not None:
+            m = torch.load(args.evaluate_from)
+            model.load_state_dict(m['state_dict'])
 
-        # train for one epoch
-        train_loss, train_err1, train_err5, lr = train(train_loader, model, criterion, optimizer, epoch)
+            if args.evalmode == 'anytime':
+                validate(test_loader, model, criterion)
+            else:
+                dynamic_evaluate(model, test_loader, val_loader, args)
+            return
 
-        # evaluate on validation set
-        # val_loss, val_err1, val_err5 = validate(val_loader, model, criterion)
-        val_loss, val_err1, val_err5 = validate(test_loader, model, criterion)
+        # set up logging
+        global log_print, f_log
+        f_log = open(os.path.join(args.save, 'log.txt'), 'w')
 
-        # save scores to a tsv file, rewrite the whole file to prevent
-        # accidental deletion
-        scores.append(('{}\t{:.3f}' + '\t{:.4f}' * 6)
-                      .format(epoch, lr, train_loss, val_loss,
-                              train_err1, val_err1, train_err5, val_err5))
+        def log_print(*args):
+            print(*args)
+            print(*args, file=f_log)
+        log_print('args:')
+        log_print(args)
+        print('model:', file=f_log)
+        print(model, file=f_log)
+        log_print('# of params:',
+                  str(sum([p.numel() for p in model.parameters()])))
 
-        is_best = val_err1 < best_err1
-        if is_best:
-            best_err1 = val_err1
-            best_epoch = epoch
-            print('Best var_err1 {}'.format(best_err1))
+        f_log.flush()
 
-        model_filename = 'checkpoint_%03d.pth.tar' % epoch
-        save_checkpoint({
-            'epoch': epoch,
-            'arch': args.arch,
-            'state_dict': model.state_dict(),
-            'best_err1': best_err1,
-            'optimizer': optimizer.state_dict(),
-        }, args, is_best, model_filename, scores)
+        scores = ['epoch\tlr\ttrain_loss\tval_loss\ttrain_err1'
+                  '\tval_err1\ttrain_err5\tval_err5']
 
-    print('Best val_err1: {:.4f} at epoch {}'.format(best_err1, best_epoch))
+        for epoch in range(args.start_epoch, args.epochs):
+
+            # train for one epoch
+            train_loss, train_err1, train_err5, lr = train(train_loader, model, criterion, optimizer, epoch)
+
+            run.log({'train_loss': train_loss})
+            run.log({'train_prec1': train_err1})
+            run.log({'lr': lr})
+
+            # evaluate on validation set
+            # val_loss, val_err1, val_err5 = validate(val_loader, model, criterion)
+            val_loss, val_err1, val_err5 = validate(test_loader, model, criterion)
+
+            run.log({'val_loss': val_loss})
+            run.log({'val_prec1': val_err1})
+
+            # save scores to a tsv file, rewrite the whole file to prevent
+            # accidental deletion
+            scores.append(('{}\t{:.3f}' + '\t{:.4f}' * 6)
+                          .format(epoch, lr, train_loss, val_loss,
+                                  train_err1, val_err1, train_err5, val_err5))
+
+            is_best = val_err1 < best_err1
+            if is_best:
+                best_err1 = val_err1
+                best_epoch = epoch
+                print('Best var_err1 {}'.format(best_err1))
+
+            model_filename = 'checkpoint_%03d.pth.tar' % epoch
+            save_checkpoint({
+                'epoch': epoch,
+                'arch': args.arch,
+                'state_dict': model.state_dict(),
+                'best_err1': best_err1,
+                'optimizer': optimizer.state_dict(),
+            }, args, is_best, model_filename, scores)
+
+        print('Best val_err1: {:.4f} at epoch {}'.format(best_err1, best_epoch))
 
 def train(train_loader, model, criterion, optimizer, epoch):
     batch_time = AverageMeter()
@@ -178,16 +201,14 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
     running_lr = None
     for i, (input, target) in enumerate(train_loader):
-
         lr = adjust_learning_rate(optimizer, epoch, args, batch=i,
                                   nBatch=len(train_loader), method=args.lr_type)
         # measure data loading time
         if running_lr is None:
             running_lr = lr
-
         data_time.update(time.time() - end)
 
-        target = target.cuda(async=True)
+        target = target.cuda(non_blocking=True)
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
 
@@ -244,7 +265,7 @@ def validate(val_loader, model, criterion):
     end = time.time()
     with torch.no_grad():
         for i, (input, target) in enumerate(val_loader):
-            target = target.cuda(async=True)
+            target = target.cuda(non_blocking=True)
             input = input.cuda()
 
             input_var = torch.autograd.Variable(input)
@@ -253,7 +274,7 @@ def validate(val_loader, model, criterion):
             data_time.update(time.time() - end)
 
             # compute output
-            output = model(input_var)
+            output, _ = model(input_var)
             if not isinstance(output, list):
                 output = [output]
 
@@ -361,7 +382,7 @@ def accuracy(output, target, topk=(1,)):
 
     res = []
     for k in topk:
-        correct_k = correct[:k].view(-1).float().sum(0)
+        correct_k = correct[:k].reshape(-1).float().sum(0)
         # res.append(100.0 - correct_k.mul_(100.0 / batch_size))
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
