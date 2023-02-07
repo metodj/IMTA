@@ -169,7 +169,7 @@ def main():
                 best_epoch = epoch
                 print('Best var_acc1 {}'.format(best_acc1))
 
-            if epoch % 10 == 0:
+            if (epoch + 1) % 10 == 0:
                 model_filename = 'checkpoint_%03d.pth.tar' % epoch
                 save_checkpoint({
                     'epoch': epoch,
