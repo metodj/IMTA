@@ -77,3 +77,28 @@ def f_probs_ovr_poe_logits_weighted_generalized(logits, threshold=0.0, weights=N
     # normalize
     probs = probs / np.repeat(probs.sum(axis=2)[:, :, np.newaxis], C, axis=2)
     return probs
+
+
+def anytime_caching(_probs: torch.Tensor, N: int, L: int) -> torch.Tensor:
+    _preds = []
+    _probs_stateful = []
+    for n in range(N):
+        preds_all, probs_stateful_all = [], []
+        max_prob_all, pred_all, max_id = 0., None, 0.
+        for l in range(L):
+            _max_prob, _pred = _probs[l, n, :].max(), _probs[l, n, :].argmax()
+            if _max_prob >= max_prob_all:
+                max_prob_all = _max_prob
+                pred_all = _pred
+                prob_stateful_all = _probs[l, n, :]
+                max_id = l
+            else:
+                prob_stateful_all = _probs[max_id, n, :]
+            preds_all.append(pred_all)
+            probs_stateful_all.append(prob_stateful_all)
+        _preds.append(torch.stack(preds_all))
+        _probs_stateful.append(torch.stack(probs_stateful_all))
+
+    _preds = torch.stack(_preds)
+    _probs_stateful = torch.stack(_probs_stateful)
+    return _probs_stateful.permute(1, 0, 2)
