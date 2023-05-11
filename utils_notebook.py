@@ -1,6 +1,11 @@
 import torch
 import numpy as np
 from typing import Dict, Optional, List
+from dataloader import get_dataloaders
+from models.msdnet_ge import MSDNet
+from models.msdnet_imta import IMTA_MSDNet
+from utils import parse_args
+from collections import OrderedDict
 
 
 def probs_decrease(probs: np.array) -> np.array:
@@ -129,3 +134,118 @@ def get_metrics_for_paper(logits: torch.Tensor, targets: torch.Tensor, model_nam
         mono_ground_truth_dict[_name] = [round(x, 4) for x in modal_probs_decreasing(targets, _probs, layer=None, N=N, thresholds=thresholds, diffs_type="all").values()]
 
     return acc_dict, mono_modal_dict, mono_ground_truth_dict
+
+
+
+def get_logits_targets_imta(model_name: str, dataset: str, epoch: int, model_pretrained: str, epoch_pretrained: int):
+    ARGS = parse_args()
+    ARGS.data_root = 'data'
+    ARGS.data = dataset
+    ARGS.save= f'/home/metod/Desktop/PhD/year1/PoE/IMTA/_models/{ARGS.data}/{model_name}'
+    ARGS.arch = 'IMTA_MSDNet'
+    ARGS.grFactor = [1, 2, 4]
+    ARGS.bnFactor = [1, 2, 4]
+    ARGS.growthRate = 6
+    ARGS.batch_size = 64
+    ARGS.epochs = 300
+    ARGS.nBlocks = 7
+    ARGS.stepmode = 'even'
+    ARGS.base = 4
+    ARGS.nChannels = 16
+    if ARGS.data == 'cifar10':
+        ARGS.num_classes = 10
+    elif ARGS.data == 'cifar100':
+        ARGS.num_classes = 100
+    else:
+        raise ValueError('Unknown dataset')
+    ARGS.step = 2
+    ARGS.use_valid = True
+    ARGS.splits = ['train', 'val', 'test']
+    ARGS.nScales = len(ARGS.grFactor)
+
+    ARGS.T = 1.0
+    ARGS.gamma = 0.1
+    ARGS.pretrained = f'/home/metod/Desktop/PhD/year1/PoE/IMTA/_models/{ARGS.data}/{model_pretrained}/save_models/checkpoint_{epoch_pretrained}.pth.tar'
+
+    problematic_prefix = 'module.'
+
+    # load pre-trained model
+    model = IMTA_MSDNet(args=ARGS)
+    MODEL_PATH = f'_models/{ARGS.data}/{model_name}/save_models/checkpoint_{epoch}.pth.tar'
+    # MODEL_PATH = f'_models/{ARGS.data}/{MODEL}/save_models/model_best.pth.tar'  # TODO: investigate why using this results in poor accuracy of baseline model
+    print(MODEL_PATH)
+    state = torch.load(MODEL_PATH)
+    params = OrderedDict()
+    for params_name, params_val in state['state_dict'].items():
+        if params_name.startswith(problematic_prefix):
+            params_name = params_name[len(problematic_prefix):]
+        params[params_name] = params_val
+    model.load_state_dict(params)
+    model = model.cuda()
+    model.eval()
+
+    # data
+    _, _, test_loader = get_dataloaders(ARGS)
+
+    logits = []
+    targets = []
+    with torch.no_grad():
+        for i, (x, y) in enumerate(test_loader):
+            y = y.cuda(device=None)
+            x = x.cuda()
+
+            input_var = torch.autograd.Variable(x)
+            target_var = torch.autograd.Variable(y)
+
+            output = model(input_var)
+
+            if not isinstance(output, list):
+                output = [output]
+
+            logits.append(torch.stack(output))
+            targets.append(target_var)
+
+    logits = torch.cat(logits, dim=1).cpu()
+    targets = torch.cat(targets).cpu()
+
+    return logits, targets
+
+
+
+def merge_dicts(data):
+    merged = {}
+    for d in data:
+        for key, value in d.items():
+            if key not in merged:
+                merged[key] = []
+            merged[key].append(value)
+    
+    result = {}
+    for key, value_lists in merged.items():
+        avg_values = [np.mean(values).round(4) for values in zip(*value_lists)]
+        std_values = [np.std(values).round(4) for values in zip(*value_lists)]
+        result[key] = (avg_values, std_values)
+    
+    return result
+
+
+
+def get_metrics_with_error_bars(model_name: str, dataset: str, model_list: List):
+    assert dataset in ['cifar10', 'cifar100', 'ImageNet']
+    acc_res, mono_modal_res, mono_correct_res = [], [], []
+    for _model, _epoch, _model_pretrained, _epoch_pretrained in model_list:
+        if dataset != 'ImageNet':
+            logits, targets = get_logits_targets_imta(model_name=_model, epoch=_epoch, dataset=dataset, 
+                                                         model_pretrained=_model_pretrained, epoch_pretrained=_epoch_pretrained)
+        else:
+            raise NotImplementedError
+        acc, mono_modal, mono_correct = get_metrics_for_paper(logits, targets, model_name=model_name)
+        acc_res.append(acc)
+        mono_modal_res.append(mono_modal)
+        mono_correct_res.append(mono_correct)
+
+    acc_res = merge_dicts(acc_res)
+    mono_modal_res = merge_dicts(mono_modal_res)
+    mono_correct_res = merge_dicts(mono_correct_res)
+
+    return acc_res, mono_modal_res, mono_correct_res
