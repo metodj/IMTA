@@ -6,6 +6,9 @@ from models.msdnet_ge import MSDNet
 from models.msdnet_imta import IMTA_MSDNet
 from utils import parse_args
 from collections import OrderedDict
+import torchvision.transforms as transforms
+import torchvision.datasets as datasets
+import os
 
 
 def probs_decrease(probs: np.array) -> np.array:
@@ -230,6 +233,98 @@ def merge_dicts(data):
 
 
 
+def get_logits_targets_imta_image_net(model_name, epoch, model_name_pretrained, epoch_pretrained, dataset='ImageNet'):
+    ARGS = parse_args()
+    ARGS.data_root = '/home/metod/Desktop/PhD/year1/PoE/MSDNet-PyTorch/data/image_net'
+    ARGS.data = dataset
+    ARGS.save= f'/home/metod/Desktop/PhD/year1/PoE/IMTA/_models/{ARGS.data}/{model_name}'
+    ARGS.arch = 'IMTA_MSDNet'
+    ARGS.grFactor = [1, 2, 4, 4]
+    ARGS.bnFactor = [1, 2, 4, 4]
+    ARGS.growthRate = 16
+    ARGS.batch_size = 350
+    ARGS.epochs = 90
+    ARGS.nBlocks = 5
+    ARGS.stepmode = 'even'
+    ARGS.base = 4
+    ARGS.nChannels = 32
+    if ARGS.data == 'cifar10':
+        ARGS.num_classes = 10
+    elif ARGS.data == 'cifar100':
+        ARGS.num_classes = 100
+    elif ARGS.data == 'ImageNet':
+        ARGS.num_classes = 1000
+    else:
+        raise ValueError('Unknown dataset')
+    ARGS.step = 4
+    ARGS.use_valid = True
+    ARGS.splits = ['train', 'val', 'test']
+    ARGS.nScales = len(ARGS.grFactor)
+
+    
+    ARGS.T = 1.0
+    ARGS.gamma = 0.1
+    ARGS.pretrained = f'/home/metod/Desktop/PhD/year1/PoE/IMTA/_models/{ARGS.data}/{model_name_pretrained}/checkpoint_0{epoch_pretrained}.pth.tar'
+
+    problematic_prefix = 'module.'
+
+    # load pre-trained model
+    model = IMTA_MSDNet(args=ARGS)
+  
+    MODEL_PATH = f'_models/{ARGS.data}/{model_name}/checkpoint_0{epoch}.pth.tar'
+    # MODEL_PATH = f'_models/{ARGS.data}/{MODEL}/save_models/model_best.pth.tar'  # TODO: investigate why using this results in poor accuracy of baseline model
+    print(MODEL_PATH)
+    state = torch.load(MODEL_PATH)
+    params = OrderedDict()
+    for params_name, params_val in state['state_dict'].items():
+        if params_name.startswith(problematic_prefix):
+            params_name = params_name[len(problematic_prefix):]
+        params[params_name] = params_val
+    model.load_state_dict(params)
+    model = model.cuda()
+    model.eval()
+
+    valdir = os.path.join(ARGS.data_root, 'valid')
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                        std=[0.229, 0.224, 0.225])
+
+    val_set = datasets.ImageFolder(valdir, transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        normalize
+    ]))
+
+    val_loader = torch.utils.data.DataLoader(
+                val_set,
+                batch_size=ARGS.batch_size, shuffle=False,
+                num_workers=ARGS.workers, pin_memory=True)
+    
+    logits = []
+    targets = []
+    with torch.no_grad():
+        for i, (x, y) in enumerate(val_loader):
+            y = y.cuda(device=None)
+            x = x.cuda()
+
+            input_var = torch.autograd.Variable(x)
+            target_var = torch.autograd.Variable(y)
+
+            output = model(input_var)
+
+            if not isinstance(output, list):
+                output = [output]
+
+            logits.append(torch.stack(output))
+            targets.append(target_var)
+
+    logits = torch.cat(logits, dim=1).cpu()
+    targets = torch.cat(targets).cpu()
+
+    return logits, targets
+
+
+
 def get_metrics_with_error_bars(model_name: str, dataset: str, model_list: List):
     assert dataset in ['cifar10', 'cifar100', 'ImageNet']
     acc_res, mono_modal_res, mono_correct_res = [], [], []
@@ -238,7 +333,8 @@ def get_metrics_with_error_bars(model_name: str, dataset: str, model_list: List)
             logits, targets = get_logits_targets_imta(model_name=_model, epoch=_epoch, dataset=dataset, 
                                                          model_pretrained=_model_pretrained, epoch_pretrained=_epoch_pretrained)
         else:
-            raise NotImplementedError
+            logits, targets = get_logits_targets_imta_image_net(model_name=_model, epoch=_epoch, dataset=dataset, 
+                                                         model_name_pretrained=_model_pretrained, epoch_pretrained=_epoch_pretrained)
         acc, mono_modal, mono_correct = get_metrics_for_paper(logits, targets, model_name=model_name)
         acc_res.append(acc)
         mono_modal_res.append(mono_modal)
@@ -249,3 +345,5 @@ def get_metrics_with_error_bars(model_name: str, dataset: str, model_list: List)
     mono_correct_res = merge_dicts(mono_correct_res)
 
     return acc_res, mono_modal_res, mono_correct_res
+
+
